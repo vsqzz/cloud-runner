@@ -201,6 +201,36 @@ client.login(process.env.DISCORD_BOT_TOKEN);
   await logToSupabase(serverId, "Bot started successfully", "info")
 }
 
+async function downloadServerFiles(serverId: string, serverDir: string) {
+  console.log(`[v0] Downloading server files for ${serverId}...`)
+
+  const { data: files } = await supabase.from("server_files").select("*").eq("server_id", serverId)
+
+  if (!files || files.length === 0) {
+    console.log(`[v0] No files to download for server ${serverId}`)
+    return false
+  }
+
+  for (const file of files) {
+    try {
+      const response = await fetch(file.file_url)
+      const buffer = await response.arrayBuffer()
+      const filePath = join(serverDir, file.file_name)
+
+      // Create directory if needed
+      const fileDir = join(filePath, "..")
+      mkdirSync(fileDir, { recursive: true })
+
+      writeFileSync(filePath, Buffer.from(buffer))
+      console.log(`[v0] Downloaded: ${file.file_name}`)
+    } catch (error) {
+      console.error(`[v0] Failed to download ${file.file_name}:`, error)
+    }
+  }
+
+  return true
+}
+
 // Start Minecraft server
 async function startMinecraftServer(server: any) {
   const serverId = server.id
@@ -212,6 +242,10 @@ async function startMinecraftServer(server: any) {
   mkdirSync(serverDir, { recursive: true })
 
   await logToSupabase(serverId, "Preparing Minecraft server...", "info")
+
+  // Determine server type and version
+  const minecraftType = server.minecraft_type || "vanilla"
+  const version = server.minecraft_version || "1.20.1"
 
   // Fetch server properties
   const { data: properties } = await supabase
@@ -245,38 +279,44 @@ view-distance=${serverProps.view_distance || 10}
 
   await logToSupabase(serverId, "Configuration files created", "info")
 
-  // Determine server type
-  const minecraftType = server.minecraft_type || "vanilla"
-  const version = server.minecraft_version || "1.20.1"
+  let launchCommand: string[] = []
 
-  const serverJar = join(serverDir, "server.jar")
-  let launchCommand = ["java", "-Xmx2048M", "-Xms1024M", "-jar", serverJar, "nogui"]
-
-  // For Forge servers, check if installation exists
   if (minecraftType === "forge") {
-    const forgeFiles = existsSync(join(serverDir, "libraries"))
-    const runBat = join(serverDir, "run.sh")
-    const runScript = existsSync(runBat)
+    const forgeInstalled = existsSync(join(serverDir, "libraries")) && existsSync(join(serverDir, "run.sh"))
 
-    if (forgeFiles && runScript) {
-      console.log(`[v0] Found existing Forge installation for ${serverName}`)
-      await logToSupabase(serverId, "Using existing Forge installation", "info")
-      launchCommand = ["bash", runBat]
-    } else {
-      await logToSupabase(serverId, "Forge not installed. Please install Forge manually first.", "error")
-      await updateServerStatus(serverId, "error")
-      return
+    if (!forgeInstalled) {
+      await logToSupabase(serverId, `Installing Forge ${version} automatically...`, "info")
+      const success = await downloadAndInstallForge(serverDir, version)
+
+      if (!success) {
+        await logToSupabase(serverId, "Failed to install Forge automatically", "error")
+        await updateServerStatus(serverId, "error")
+        return
+      }
+
+      await logToSupabase(serverId, "Forge installed successfully", "info")
     }
+
+    // Use the run.sh script
+    launchCommand = ["bash", "run.sh"]
   } else {
-    // Download vanilla server jar if needed
+    // Vanilla server
+    const serverJar = join(serverDir, "server.jar")
+
     if (!existsSync(serverJar)) {
-      await logToSupabase(serverId, `Downloading Minecraft ${version}...`, "info")
-      // In production, implement actual download logic here
-      // For now, log that manual setup is needed
-      await logToSupabase(serverId, "Server jar not found. Please upload server.jar manually.", "error")
-      await updateServerStatus(serverId, "error")
-      return
+      await logToSupabase(serverId, `Downloading vanilla Minecraft ${version}...`, "info")
+      const downloadedJar = await downloadVanillaServer(serverDir, version)
+
+      if (!downloadedJar) {
+        await logToSupabase(serverId, "Failed to download Minecraft server", "error")
+        await updateServerStatus(serverId, "error")
+        return
+      }
+
+      await logToSupabase(serverId, "Minecraft server downloaded successfully", "info")
     }
+
+    launchCommand = ["java", "-Xmx2048M", "-Xms1024M", "-jar", "server.jar", "nogui"]
   }
 
   // Start the Minecraft server
@@ -431,3 +471,120 @@ process.on("SIGTERM", async () => {
   }
   process.exit(0)
 })
+
+// Automatic Minecraft and Forge installer functions
+
+async function downloadVanillaServer(serverDir: string, version = "1.20.1"): Promise<string | null> {
+  console.log(`[v0] Downloading vanilla Minecraft ${version}...`)
+
+  try {
+    // First, get version manifest
+    const manifestResponse = await fetch("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")
+    const manifest = await manifestResponse.json()
+
+    // Find the version
+    const versionInfo = manifest.versions.find((v: any) => v.id === version)
+    if (!versionInfo) {
+      console.error(`[v0] Version ${version} not found in manifest`)
+      return null
+    }
+
+    // Get version details
+    const versionResponse = await fetch(versionInfo.url)
+    const versionData = await versionResponse.json()
+
+    // Download server jar
+    const serverUrl = versionData.downloads.server.url
+    const serverJar = join(serverDir, "server.jar")
+
+    console.log(`[v0] Downloading from ${serverUrl}...`)
+    const serverResponse = await fetch(serverUrl)
+    const buffer = await serverResponse.arrayBuffer()
+    writeFileSync(serverJar, Buffer.from(buffer))
+
+    console.log(`[v0] Successfully downloaded vanilla Minecraft ${version}`)
+    return serverJar
+  } catch (error) {
+    console.error(`[v0] Failed to download vanilla server:`, error)
+    return null
+  }
+}
+
+async function downloadAndInstallForge(serverDir: string, minecraftVersion = "1.20.1"): Promise<boolean> {
+  console.log(`[v0] Installing Forge for Minecraft ${minecraftVersion}...`)
+
+  try {
+    // Forge version mappings
+    const forgeVersions: Record<string, string> = {
+      "1.20.1": "47.3.0",
+      "1.19.4": "45.2.0",
+      "1.19.2": "43.4.0",
+      "1.18.2": "40.2.21",
+      "1.16.5": "36.2.39",
+    }
+
+    const forgeVersion = forgeVersions[minecraftVersion]
+    if (!forgeVersion) {
+      console.error(`[v0] No Forge version mapping for Minecraft ${minecraftVersion}`)
+      return false
+    }
+
+    const installerUrl = `https://maven.minecraftforge.net/net/minecraftforge/forge/${minecraftVersion}-${forgeVersion}/forge-${minecraftVersion}-${forgeVersion}-installer.jar`
+    const installerPath = join(serverDir, "forge-installer.jar")
+
+    console.log(`[v0] Downloading Forge installer from ${installerUrl}...`)
+    const response = await fetch(installerUrl)
+
+    if (!response.ok) {
+      console.error(`[v0] Failed to download Forge installer: ${response.statusText}`)
+      return false
+    }
+
+    const buffer = await response.arrayBuffer()
+    writeFileSync(installerPath, Buffer.from(buffer))
+
+    console.log(`[v0] Running Forge installer...`)
+
+    // Run the installer
+    return new Promise((resolve) => {
+      const installer = spawn("java", ["-jar", "forge-installer.jar", "--installServer"], {
+        cwd: serverDir,
+      })
+
+      installer.stdout.on("data", (data) => {
+        console.log(`[v0] [Forge Installer] ${data.toString()}`)
+      })
+
+      installer.stderr.on("data", (data) => {
+        console.error(`[v0] [Forge Installer Error] ${data.toString()}`)
+      })
+
+      installer.on("exit", (code) => {
+        if (code === 0) {
+          console.log(`[v0] Forge installation completed successfully`)
+
+          // Create run.sh script for easier launching
+          const runScript = `#!/bin/bash
+java -Xmx2048M -Xms1024M @libraries/net/minecraftforge/forge/${minecraftVersion}-${forgeVersion}/unix_args.txt nogui
+`
+          writeFileSync(join(serverDir, "run.sh"), runScript)
+
+          // Create run.bat for Windows compatibility
+          const runBat = `@echo off
+java -Xmx2048M -Xms1024M @libraries/net/minecraftforge/forge/${minecraftVersion}-${forgeVersion}/win_args.txt nogui
+pause
+`
+          writeFileSync(join(serverDir, "run.bat"), runBat)
+
+          resolve(true)
+        } else {
+          console.error(`[v0] Forge installer failed with exit code ${code}`)
+          resolve(false)
+        }
+      })
+    })
+  } catch (error) {
+    console.error(`[v0] Failed to install Forge:`, error)
+    return false
+  }
+}
