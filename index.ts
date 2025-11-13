@@ -4,22 +4,40 @@ import { mkdirSync, writeFileSync, existsSync } from "fs"
 import { join } from "path"
 import "dotenv/config"
 
+console.log("[v0] ========================================")
+console.log("[v0] Nexus Cloud Runner Starting...")
+console.log("[v0] ========================================")
+console.log("[v0] Checking environment variables...")
+
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || ""
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || ""
+
+console.log("[v0] SUPABASE_URL:", SUPABASE_URL ? `${SUPABASE_URL.substring(0, 30)}...` : "❌ NOT SET")
+console.log("[v0] SUPABASE_SERVICE_ROLE_KEY:", SUPABASE_KEY ? "✅ SET" : "❌ NOT SET")
+
+if (!SUPABASE_URL || !SUPABASE_KEY) {
+  console.error("[v0] ========================================")
+  console.error("[v0] FATAL ERROR: Missing environment variables!")
+  console.error("[v0] ========================================")
+  console.error("[v0] Please set these in your Railway service variables:")
+  console.error("[v0]   - SUPABASE_URL (your Supabase project URL)")
+  console.error("[v0]   - SUPABASE_SERVICE_ROLE_KEY (your Supabase service role key)")
+  console.error("[v0]")
+  console.error("[v0] Go to Railway → Your Cloud Runner Service → Variables")
+  console.error("[v0] Add the variables directly to this service (not just shared)")
+  console.error("[v0] ========================================")
+  process.exit(1)
+}
+
 // Supabase client
-const supabase = createClient(
-  process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-  process.env.SUPABASE_SERVICE_ROLE_KEY || "",
-)
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
+
+console.log("[v0] ✅ Supabase client initialized successfully")
+console.log("[v0] ========================================")
 
 // Track running processes
 const runningProcesses = new Map<string, ChildProcess>()
 const processLogs = new Map<string, string[]>()
-
-console.log("[v0] Nexus Cloud Runner starting...")
-console.log(
-  "[v0] Supabase URL:",
-  (process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "NOT SET")?.substring(0, 30) + "...",
-)
-console.log("[v0] Service Role Key:", process.env.SUPABASE_SERVICE_ROLE_KEY ? "SET" : "NOT SET")
 
 // Create workspace directories
 const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT || "/app/workspace"
