@@ -514,6 +514,15 @@ async function downloadAndInstallForge(serverDir: string, minecraftVersion = "1.
   console.log(`[v0] Installing Forge for Minecraft ${minecraftVersion}...`)
 
   try {
+    // Step 1: Download vanilla Minecraft server jar (required for Forge installation)
+    console.log(`[v0] Step 1: Downloading vanilla Minecraft ${minecraftVersion} server jar...`)
+    const vanillaJar = await downloadVanillaServer(serverDir, minecraftVersion)
+    if (!vanillaJar) {
+      console.error(`[v0] Failed to download vanilla Minecraft server - required for Forge`)
+      return false
+    }
+    console.log(`[v0] ✅ Vanilla server jar downloaded`)
+
     // Forge version mappings
     const forgeVersions: Record<string, string> = {
       "1.20.1": "47.3.0",
@@ -532,7 +541,7 @@ async function downloadAndInstallForge(serverDir: string, minecraftVersion = "1.
     const installerUrl = `https://maven.minecraftforge.net/net/minecraftforge/forge/${minecraftVersion}-${forgeVersion}/forge-${minecraftVersion}-${forgeVersion}-installer.jar`
     const installerPath = join(serverDir, "forge-installer.jar")
 
-    console.log(`[v0] Downloading Forge installer from ${installerUrl}...`)
+    console.log(`[v0] Step 2: Downloading Forge installer from ${installerUrl}...`)
     const response = await fetch(installerUrl)
 
     if (!response.ok) {
@@ -542,8 +551,9 @@ async function downloadAndInstallForge(serverDir: string, minecraftVersion = "1.
 
     const buffer = await response.arrayBuffer()
     writeFileSync(installerPath, Buffer.from(buffer))
+    console.log(`[v0] ✅ Forge installer downloaded`)
 
-    console.log(`[v0] Running Forge installer...`)
+    console.log(`[v0] Step 3: Running Forge installer to patch server...`)
 
     // Run the installer
     return new Promise((resolve) => {
@@ -561,24 +571,25 @@ async function downloadAndInstallForge(serverDir: string, minecraftVersion = "1.
 
       installer.on("exit", (code) => {
         if (code === 0) {
-          console.log(`[v0] Forge installation completed successfully`)
+          console.log(`[v0] ✅ Forge installation completed successfully`)
 
-          // Create run.sh script for easier launching
           const runScript = `#!/bin/bash
-java -Xmx2048M -Xms1024M @libraries/net/minecraftforge/forge/${minecraftVersion}-${forgeVersion}/unix_args.txt nogui
+java -Xmx2048M -Xms1024M @libraries/net/minecraftforge/forge/${minecraftVersion}-${forgeVersion}/unix_args.txt "$@"
 `
           writeFileSync(join(serverDir, "run.sh"), runScript)
+          console.log(`[v0] Created run.sh script`)
 
           // Create run.bat for Windows compatibility
           const runBat = `@echo off
-java -Xmx2048M -Xms1024M @libraries/net/minecraftforge/forge/${minecraftVersion}-${forgeVersion}/win_args.txt nogui
+java -Xmx2048M -Xms1024M @libraries/net/minecraftforge/forge/${minecraftVersion}-${forgeVersion}/win_args.txt %*
 pause
 `
           writeFileSync(join(serverDir, "run.bat"), runBat)
+          console.log(`[v0] Created run.bat script`)
 
           resolve(true)
         } else {
-          console.error(`[v0] Forge installer failed with exit code ${code}`)
+          console.error(`[v0] ❌ Forge installer failed with exit code ${code}`)
           resolve(false)
         }
       })
