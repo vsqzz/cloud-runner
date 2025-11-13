@@ -5,14 +5,21 @@ import { join } from "path"
 import "dotenv/config"
 
 // Supabase client
-const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
+const supabase = createClient(
+  process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "",
+  process.env.SUPABASE_SERVICE_ROLE_KEY || "",
+)
 
 // Track running processes
 const runningProcesses = new Map<string, ChildProcess>()
 const processLogs = new Map<string, string[]>()
 
 console.log("[v0] Nexus Cloud Runner starting...")
-console.log("[v0] Supabase URL:", process.env.NEXT_PUBLIC_SUPABASE_URL?.substring(0, 30) + "...")
+console.log(
+  "[v0] Supabase URL:",
+  (process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "NOT SET")?.substring(0, 30) + "...",
+)
+console.log("[v0] Service Role Key:", process.env.SUPABASE_SERVICE_ROLE_KEY ? "SET" : "NOT SET")
 
 // Create workspace directories
 const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT || "/app/workspace"
